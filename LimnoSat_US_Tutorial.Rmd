@@ -1,0 +1,165 @@
+---
+title: "LimnoSat-US_Tutorial"
+author: "Simon Topp"
+date: "11/2/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(leaflet)
+library(sf)
+library(feather)
+library(lubridate)
+library(leafgl)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#  LimnoSat-US Download and Walkthrough
+
+### This document outlines downloading the LimnoSat-US database and conducting some initial data extraction and visualization.
+
+First we need to download the actual database, if you've already downloaded it, skip this first chunk.
+
+```{r LimnoSat Download, eval = F}
+## Pull the URLS from the zenodo repo. More information on the contents of these files can be found at
+## https://doi.org/10.5281/zenodo.4139694.
+ls.urls <- httr::GET("https://zenodo.org/api/records/4139694") 
+ls.urls <- jsonlite::fromJSON(httr::content(ls.urls, as = "text"))
+files <- ls.urls$files
+urls <- files$links$download
+
+## Identify the folder you want to store the data in
+folder <- 'data/LimnoSat/'
+
+##Download the Deepest point shapefile.  This contains the locations of all the lakes in the database.
+## Note: On windows you need mode = 'wb' over the default mode = 'w' for download.file)
+grep('DP', urls, value = T) %>% purrr::map(., ~download.file(., paste0(folder,basename(.)), mode = 'wb'))
+
+## Download the scene metadata.  This includes things like scene cloud cover and sun angle for all the 
+## remote sensing observations in LimnoSat-US.
+meta.url <- grep('SceneMetadata', urls, value = T)
+download.file(meta.url, paste0(folder,basename(meta.url)), mode = 'wb')
+
+## Download the actual LimnoSat Database, here we'll download the .feather version because it's
+## a little smaller, if you'd prefer the csv, just swap out the .feather with .csv below
+## Note: This takes  a couple minutes because the file is ~3gb. Also, we'll rename the file to be
+## more user friendly.
+ls.url <- grep('srCorrected_us_hydrolakes_dp_20200628.feather', urls, value = T)
+download.file(ls.url, paste0(folder, 'LimnoSat_20200628.feather'), mode = 'wb')
+
+rm(ls.url, ls.urls, meta.url, urls, files,)
+```
+
+### Ok, now that you have the database, take a look at it. Specifically, find your lake of interest and make note of the lakes Hylak_ID
+
+```{r lakeView, warning = F}
+## Read in the data
+# Lakes
+lakes <- st_read('data/LimnoSat/HydroLakes_DP.shp') %>%
+  st_centroid()
+
+#LimnoSat
+ls <- read_feather('data/LimnoSat/LimnoSat_20200628.feather')
+
+#Find your lake of interest, click on the a lake to get it's Hylak_id
+leaflet() %>%
+  addTiles() %>%
+  addGlPoints(lakes %>% filter(type == 'dp'), popup = 'Hylak_id')
+```
+
+### We'll use Lake Mendota as an example here, after looking at the lakes, we know it's HydroLakes ID.  We'll filter the database and look at Mendota a little more carefully
+
+#### First just look at the distribution of observations that we have for it
+
+```{r Mendota Explorer}
+# Filter to Mendota and add some useful variables
+Mendota <- ls %>% filter(Hylak_id == 9086) %>%
+  mutate(month = month(date, label = T),
+         doy = yday(date),
+         period = cut(year, 12, dig.lab = 4))
+
+# Yearly observations
+ggplot(Mendota, aes(x = year)) + geom_bar() + labs(y = 'Number of Observations', title = 'Yearly Observations') + theme_bw()
+
+# Monthly observations
+Mendota %>% mutate(month = month(date, label = T)) %>%
+  ggplot(., aes(x = month)) + geom_bar() + labs(y = 'Number of Observations', title = 'Monthly Observations') + theme_bw()
+```
+
+### For Mendota, looks like we have a total of `r nrow(Mendota)` observations. LimnoSat-US contains all the Landsat Reflectance values as well as the dominant wavelength, a metric of color. Here, we'll use dominant wavelength to explore the data because it's an intuitive way to examine lake systems.
+
+```{r}
+#Connect dWL to the forel ule index for visualization
+fui.lookup <- tibble(dWL = c(471:583), fui = NA)
+fui.lookup$fui[fui.lookup$dWL <= 583] = 21
+fui.lookup$fui[fui.lookup$dWL <= 581] = 20
+fui.lookup$fui[fui.lookup$dWL <= 579] = 19
+fui.lookup$fui[fui.lookup$dWL <= 577] = 18
+fui.lookup$fui[fui.lookup$dWL <= 575] = 17
+fui.lookup$fui[fui.lookup$dWL <= 573] = 16
+fui.lookup$fui[fui.lookup$dWL <= 571] = 15
+fui.lookup$fui[fui.lookup$dWL <= 570] = 14
+fui.lookup$fui[fui.lookup$dWL <= 569] = 13
+fui.lookup$fui[fui.lookup$dWL <= 568] = 12
+fui.lookup$fui[fui.lookup$dWL <= 567] = 11
+fui.lookup$fui[fui.lookup$dWL <= 564] = 10
+fui.lookup$fui[fui.lookup$dWL <= 559] = 9
+fui.lookup$fui[fui.lookup$dWL <= 549] = 8
+fui.lookup$fui[fui.lookup$dWL <= 530] = 7
+fui.lookup$fui[fui.lookup$dWL <= 509] = 6
+fui.lookup$fui[fui.lookup$dWL <= 495] = 5
+fui.lookup$fui[fui.lookup$dWL <= 489] = 4
+fui.lookup$fui[fui.lookup$dWL <= 485] = 3
+fui.lookup$fui[fui.lookup$dWL <= 480] = 2
+fui.lookup$fui[fui.lookup$dWL <= 475 & fui.lookup$dWL >470] = 1
+
+# Actual Forel-Ule Colors
+fui.colors <- c(
+  "#2158bc", "#316dc5", "#327cbb", "#4b80a0", "#568f96", "#6d9298", "#698c86", 
+  "#759e72", "#7ba654", "#7dae38", "#94b660","#94b660", "#a5bc76", "#aab86d", 
+  "#adb55f", "#a8a965", "#ae9f5c", "#b3a053", "#af8a44", "#a46905", "#9f4d04")
+
+Mendota <- Mendota %>% left_join(fui.lookup) 
+
+min.fui <- min(Mendota$fui)
+max.fui <- max(Mendota$fui)
+
+# Overall Color Distribution
+Mendota %>% group_by(dWL) %>%
+  summarise(count = n()) %>%
+  left_join(fui.lookup) %>%
+  ggplot(., aes(x = dWL, y = count, fill = fui)) + 
+  geom_col() +
+  scale_fill_gradientn(colours = fui.colors[min.fui:max.fui]) +
+  labs(x = 'Wavelength (nm)', title = 'Overall Color Distribution') +
+  theme_bw() +
+  theme(legend.position = 'none')
+
+# Monthly Climatology
+ggplot(Mendota, aes(x = month, y = dWL)) + 
+  #geom_violin(draw_quantiles = .5) +
+  geom_boxplot(outlier.colour = 'transparent') +
+  geom_jitter(aes(color = fui), size = 2, position = position_jitter(.2)) +
+  scale_color_gradientn(colours = fui.colors[min.fui:max.fui]) +
+  labs(y = 'Wavelength (nm)', title = 'Monthly Climatology') +
+  theme_bw() +
+  theme(legend.position = 'none')
+
+# Summer color observations over time
+Mendota %>%
+  filter(month %in% c('Jun', 'Jul', 'Aug')) %>%
+  ggplot(., aes(x = date, y = dWL)) + 
+  geom_point(aes(color = fui), size = 3) +
+  geom_smooth(se = T, method = 'lm') +
+  scale_color_gradientn(colours = fui.colors[min.fui:max.fui]) +
+  labs(y = 'Wavelenght (nm)', x = 'Year', title = 'Summer (JJA) Lake Color Over Time') +
+  theme_bw() +
+  theme(legend.position = 'none')
+```
+
+### That's it!  If you have any questions feel free to reach out at sntopp@live.unc.edu
+![](https://media.giphy.com/media/3oEhn6803hZKJNeMhy/giphy.gif)
