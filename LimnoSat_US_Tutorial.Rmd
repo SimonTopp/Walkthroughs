@@ -32,8 +32,14 @@ ls.urls <- jsonlite::fromJSON(httr::content(ls.urls, as = "text"))
 files <- ls.urls$files
 urls <- files$links$download
 
-## Identify the folder you want to store the data in
-folder <- 'data/LimnoSat/'
+## Identify/Create the folder you want to store the data in
+folder <- 'data/LimnoSat'
+if (file.exists(folder)){
+  folder <- paste0(folder,'/')
+} else {
+    dir.create(folder)
+  folder <- paste0(folder,'/')
+}
 
 ##Download the Deepest point shapefile.  This contains the locations of all the lakes in the database.
 ## Note: On windows you need mode = 'wb' over the default mode = 'w' for download.file)
